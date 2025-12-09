@@ -114,9 +114,9 @@ The **Sender** must know the **Receiver's** MAC address:
 2.  Copy this MAC address.
 3.  In `Sender_Code.ino`, replace the placeholder in `receiverAddress[]` with the copied MAC address.
 
-```cpp
+'''cpp
 // Replace with your receiver MAC address
-uint8_t receiverAddress[] = {0x84, 0x0D, 0x8E, 0x99, 0xE8, 0xA2};
+uint8_t receiverAddress[] = {0x84, 0x0D, 0x8E, 0x99, 0xE8, 0xA2};'''
 
 ---
 
