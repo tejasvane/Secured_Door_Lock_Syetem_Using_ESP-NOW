@@ -1,0 +1,147 @@
+#include <ESP8266WiFi.h>
+#include <espnow.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// ---------------- LCD ----------------
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Adjust 0x27 if your I2C address is different
+
+// ---------------- Pins ----------------
+#define BUZZER_PIN D4   // Receiver's Alarm Buzzer
+#define RELAY_PIN  D6   // Controls the Solenoid Lock
+#define LED_PIN    D7   // Status LED
+#define RESET_PIN  D5   // Push button to GND
+
+// ---------------- Password ----------------
+String correctPassword = "1580";
+
+// ---------------- State ----------------
+enum StateType { IDLE, SUCCESS, FAILURE };
+StateType state = IDLE;
+String receivedPassword = "";
+unsigned long unlockStartTime = 0;
+bool alarmActive = false;
+
+// ---------------- Functions ----------------
+void resetSystem() {
+  alarmActive = false;
+  state = IDLE;
+  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(RELAY_PIN, LOW);
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Secure Door Lock");
+  lcd.setCursor(0,1);
+  lcd.print("Enter Password");
+}
+
+void goodBeep() {
+  // Two quick beeps for success
+  digitalWrite(BUZZER_PIN, HIGH);
+  digitalWrite(LED_PIN, HIGH);
+  delay(150);
+  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);
+  delay(150);
+  digitalWrite(BUZZER_PIN, HIGH);
+  digitalWrite(LED_PIN, HIGH);
+  delay(150);
+  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);
+}
+
+void siren() {
+  // Repetitive siren sound for failure
+  digitalWrite(BUZZER_PIN, HIGH);
+  digitalWrite(LED_PIN, HIGH);
+  delay(300);
+  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);
+  delay(300);
+}
+
+// ---------------- ESP-NOW Callback ----------------
+void onDataRecv(uint8_t *mac, uint8_t *incomingData, uint8_t len) {
+  char msg[32];
+  memcpy(msg, incomingData, len);
+  msg[len] = '\0';
+  receivedPassword = String(msg);
+
+  Serial.print("Received password: ");
+  Serial.println(receivedPassword);
+
+  if (receivedPassword == correctPassword) {
+    state = SUCCESS;
+    unlockStartTime = millis(); // start 5 sec unlock
+  } else {
+    state = FAILURE;
+    alarmActive = true;
+  }
+}
+
+// ---------------- Setup ----------------
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(RESET_PIN, INPUT_PULLUP); // Use internal pull-up resistor
+
+  digitalWrite(RELAY_PIN, LOW); // Ensure lock starts locked
+
+  lcd.init();
+  lcd.backlight();
+  resetSystem(); // Initialize display
+
+  WiFi.mode(WIFI_STA);
+  Serial.print("Receiver MAC: ");
+  Serial.println(WiFi.macAddress()); // Print MAC for Sender config
+
+  if (esp_now_init() != 0) {
+    Serial.println("ESP-NOW init failed!");
+    return;
+  }
+
+  esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
+  esp_now_register_recv_cb(onDataRecv);
+}
+
+// ---------------- Loop ----------------
+void loop() {
+  unsigned long currentMillis = millis();
+
+  // ---------------- Success Branch ----------------
+  if (state == SUCCESS) {
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("Permission Granted");
+    lcd.setCursor(0,1);
+    lcd.print("Welcome Home");
+
+    goodBeep();
+    digitalWrite(RELAY_PIN, HIGH);   // Unlock solenoid
+    unlockStartTime = currentMillis;
+    state = IDLE; // Move to IDLE but relay remains HIGH for 5s
+  }
+
+  // ---------------- Relay Timing (5 second unlock) ----------------
+  // This handles turning the relay OFF after 5 seconds if it was turned ON (HIGH)
+  if (digitalRead(RELAY_PIN) == HIGH && currentMillis - unlockStartTime >= 5000) {
+    digitalWrite(RELAY_PIN, LOW); // Lock again
+    resetSystem(); // Back to idle screen
+  }
+
+  // ---------------- Failure Branch (Alarm) ----------------
+  if (alarmActive && state == FAILURE) {
+    siren(); // Keep repeating until reset
+  }
+
+  // ---------------- Reset button ----------------
+  if (digitalRead(RESET_PIN) == LOW) {
+    Serial.println("Reset pressed -> system reset");
+    resetSystem();
+    delay(500); // Debounce delay
+  }
+}
